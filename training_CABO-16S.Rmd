@@ -1,0 +1,119 @@
+---
+title: "benchmarking"
+author: "Eitel et al. 2024"
+date: "2023-09-13"
+output:
+  html_document:
+      toc: true
+      toc_depth: 5
+      toc_float:
+        collapsed: true
+---
+
+```{r setup, include=FALSE}
+working_dir=paste0("/export/data1/projects/tagdb_public/")
+
+knitr::opts_chunk$set(echo = TRUE, eval = F)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_knit$set(root.dir = working_dir)
+
+### RUN THIS LINE IN THE CONSOLE AGAIN:
+setwd(working_dir)
+```
+
+## Training the classifier
+
+Classifiers were trained with each database, CABO-16S and [SILVA 138.2](https://www.arb-silva.de/), usinng IDTAXA based on standard parameters. See the script [LINK TO CABO MERGE]() for the construction of each. Briefly, the SILVA 138.2 fasta was obtained by dropping the eukaryotic (18S rRNA) sequences and otherwise left intact. CABO-16S is the result of merging this prokaryotic-only SILVA 138.2 with plastids from the [PR2](https://pr2-database.org/) database and a set of unpublished sequences. 
+
+Code presented here is drawn from the examples and recommendations at [IDTXA documentation](http://www2.decipher.codes/Documentation/Documentation-ClassifySequences.html)
+
+### Libraries
+
+```{r eval=T}
+library(DECIPHER)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+```
+
+### Read data
+Sequences were read in, leading accessions trimmed off, and unique combinations taxa (including differentially ragged taxa) were counted.
+```{r eval=T}
+seqs<-readDNAStringSet("CABO-16S.fasta")
+#seqs <- readDNAStringSet("SILVA-138.2_only_withChl.fasta")
+groups <- gsub(".* Root;","Root;", names(seqs)) # sequence names
+
+groupCounts <- table(groups)
+u_groups <- names(groupCounts) # unique groups
+cat("Number of groups: ", length(u_groups), '\n') # number of group
+
+taxid <- NULL
+```
+
+### Prune groups
+
+To minimize the effect of differential representation, groups with more than 100 sequences were randomly downsampled to include 100 sequences. Groups with less than 100 sequences were left unchanged. We present downsampling to 100 as that matches the IDTAXA documentation, but we did vary the `maxGroupSize` number and had qualitatively similar results (results not presented here or in manuscript).
+```{r eval=T}
+maxGroupSize<- 100
+remove <- logical(length(seqs))
+
+for (i in which(groupCounts > maxGroupSize)) {
+  index <- which(groups==u_groups[i])
+  keep <- sample(length(index), maxGroupSize)
+  remove[index[-keep]] <- TRUE
+}
+
+cat("Number of sequences eliminated: ", sum(remove), "\n")
+```
+
+Now with the pruned set, we iterate the training process, where each iteration removes "problem sequences" that couldn't be fit from the last training attempt. This topic is discused in detail in the [IDTAXA paper by Murali et al](https://microbiomejournal.biomedcentral.com/articles/10.1186/s40168-018-0521-5), but briefly, the logic is that incorrectly classified reference sequences during training are probably simply misnamed. Since SILVA has plenty of real sequences for most taxa, the benefit of removing an erroneously labeled sequence is dramatic compared to the minor cost of by chance removing a real sequence. The `allowGroupRemoval` doesn't allow taxon groups to be dropped, so this shouldn't cause poorly classified groups or groups with few representatives to be removed. Majority of code based on [DECIPHER recommendations](https://www.bioconductor.org/packages/release/bioc/vignettes/DECIPHER/inst/doc/ClassifySequences.pdf). 
+```{r eval=F}
+maxIterations <- 3 # must be >= 1
+allowGroupRemoval <- FALSE
+probSeqsPrev <- integer() # suspected problem sequences from prior iteration
+
+for (i in seq_len(maxIterations)) {
+  cat("Training iteration: ", i, "\n", sep="")
+  
+  # train the classifier, this step takes SEVERAL HOURS
+  trainingSet <- LearnTaxa(seqs[!remove], names(seqs)[!remove],taxid,K=8)  # K= 8 to match RDP/QIIME
+  
+  # look for problem sequences, if none or no improvement, stop iterating
+  probSeqs <- trainingSet$problemSequences$Index
+  print(paste("Problem groups: ", i))
+  print(trainingSet$problemGroups)
+  if (length(probSeqs)==0) {
+    cat("No problem sequences remaining.\n")
+    break
+  } else if (length(probSeqs)==length(probSeqsPrev) && all(probSeqsPrev==probSeqs)) {
+    cat("Iterations converged.\n")
+    break
+  }
+  
+  if (i==maxIterations) break
+  
+  probSeqsPrev <- probSeqs
+  # remove any problem sequences
+  index <- which(!remove)[probSeqs] # find new problem sequences not yet flagged
+  remove[index] <- TRUE # flag problem sequences for the main dataset
+  
+  if (!allowGroupRemoval) {
+    # replace any removed groups
+    missing <- !(u_groups %in% groups[!remove])
+    missing <- u_groups[missing]
+  
+    if (length(missing) > 0) {
+    index <- index[groups[index] %in% missing]
+    remove[index] <- FALSE # don't remove
+    }
+  }
+}
+
+print(sum(remove)) # total number of sequences eliminated
+print(length(probSeqs)) # number of remaining problem sequences
+
+## if satisfied
+save(trainingSet, file="CABO-16S.RData")
+```
+

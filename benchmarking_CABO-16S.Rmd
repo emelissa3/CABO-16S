@@ -1,0 +1,485 @@
+---
+title: "benchmarking"
+author: "Eitel et al. 2024"
+date: "2023-09-13"
+output:
+  html_document:
+      toc: true
+      toc_depth: 5
+      toc_float:
+        collapsed: true
+---
+
+```{r setup, include=FALSE}
+working_dir=paste0("/export/data1/projects/tagdb_public/")
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_knit$set(root.dir = working_dir)
+
+### RUN THIS LINE IN THE CONSOLE AGAIN:
+setwd(working_dir)
+```
+
+### Overview
+
+The widespread adoption of 16S rRNA amplicon sequencing has greatly advanced surveys of microbial diversity. A key step in many such analyses includes taxonomic annotation of the obtained sequences. For this annotation step, multiple databases for 16S rRNA exist, including [SILVA](https://www.arb-silva.de/), [GreenGenes](https://greengenes2.ucsd.edu/), and [PR2](https://pr2-database.org/). 
+
+Due to its breadth and consistent maintenance, SILVA is one of the most popular databses. However, SILVA does not include plastids, and some information may be lacking for particular groups of environmental interest (e.g., uncultured symbiotic deep-sea sulfate-reducing bacteria). Although SILVA 138.2 is improved compared to previous versions, missing groups within training sets can lead to drastic differences in identification of 16S rRNA relative abundance. 
+
+We joined existing databases to allow combined annotation of prokaryotic and plastidal 16S rRNA sequences. This new database combines the entire set of prokaryotic sequences from SILVA-138.2  with plastids from the PR2 database. Since this operation includes a merge step, we also merged previously unpublished lab sequences to produce a new training set. The specific commands used to merge these reference sets are available at [ MERGE SCRIPT](). A classifier was then trained with [IDTAXA's LearnTaxa()](http://www2.decipher.codes/Classification.html); the code used is available at [TRAINING SCRIPT](). Both the raw fastas and the R object for the IDTAXA trained classifier are available at [FigShare](https://doi.org/10.6084/m9.figshare.27288090.v1). A benchmarking set of v4v5 16S rRNA amplicon datasets including both mock communities and diverse environmental systems (e.g. marine and lake water, terrestrial soils, deep and shallow marine sediment, and guts) was processed with [DADA2](https://benjjneb.github.io/dada2/), for which the script is available at [DADA2 SCRIPT]() and the resulting ASV counts matrix and representative sequences are available in the [SUPPLEMENTARY TABLES]().
+
+This new reference database allows for correct, one-step identification of bacteria, archea, and plastids in diverse samples. This document presents the commands used to classify the benchmarking ASV sets and produce the figures used to determine its efficacy that are presented in the publication. Additionally, this code is anticipated to be used to compare future versions of SILVA, PR2, and merges of different subsets to evaluate updated training sets. 
+
+### Libraries & starting data
+#### Libraries
+
+```{r}
+library(DECIPHER)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(tidyr)
+library(ggforce)
+```
+
+
+#### Common variables
+
+```{r}
+batches <- c("fouhy","kozich","mlw","seagrass","seeps","needham","soil","pescadero")
+
+stock_colors <- c("#FF0000","#F6A300","#0068CC","#6600AA","#AC0088","#AA33FF","#00FFFF","#00CC00","#006611","#00AC99",
+				 "#AC6844","#FFFF00","#991100","#ACAC11","#a0f0aa","#FF00FF","#FF8611","#B9F6F6","#001166","#AC9A00",
+				 "#994141","#ff1169","#0AF622","#119924","#Ac3311","#004A9A","#AcAc99","turquoise","tomato","sienna1",
+				 "rosybrown","peachpuff","olivedrab3","mistyrose1","mediumorchid","#ca99aa","#114914","#660011",
+				 "ivory3","deeppink","#331111","#92F201","orchid4", "steelblue2","tomato4","gold4")
+
+
+ggtheme <- theme_minimal() + theme(axis.text = element_text(color='black'), panel.background = element_rect(fill='white'),
+                                   panel.border = element_rect(color='black', fill='NA'),strip.background = element_blank(),
+                                   strip.text = element_text(color='black'))
+ggtheme_rot <- ggtheme + theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5, color='black'))
+```
+
+#### Download starting data
+This script assumes the following data have been produced by the other scripts, or their outputs must be downloaded:
+
+ * ASV counts matrix, Supplemental Table S2 - [LINK]()
+ * ASV fasta, Additional File 1 - [LINK]()
+ * Classifier trained with SILVA 138.2 - [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v1)
+ * Classifier trained with CABO-16S - [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v1)
+ * OPTIONAL - metadata about each sample from Supplemental Table 1 - [LINK]()
+
+
+### Classifying
+
+The ASVs were loaded in
+```{r message=F, warn=F}
+#asv_counts <- do.call(rbind, lapply(batches, function(x) melt(read.csv(paste0("ASV_counts-", x, ".tsv"), sep="\t"))))
+asv_counts <- do.call(rbind, lapply(batches, function(x) 
+  melt(readxl::read_excel('supplementals/Table_S2.xlsx', sheet = paste0('ASV_counts-',x)))))
+colnames(asv_counts) <- c('ASV','Sample','Count')
+asv_counts$Dataset <- gsub("-ASV_.*$","", asv_counts$ASV)
+
+asv_seqs <- readDNAStringSet('supplementals/Data_ASVs.fa')
+#asv_seqs <- readDNAStringSet(paste0("ASVs-",batches,".fa"))
+```
+
+
+We loaded in the database trained based on the script `training.Rmd`, the trained objects can be found at the above section.
+```{r eval=F}
+load("SILVA-138.2_only_withChl.RData") # SILVA 138.2
+silva_138.2_orig <- trainingSet
+rm(trainingSet)
+load("CABO-16S.RData") # CABO-16S
+silva_138.2_cabo <- trainingSet
+rm(trainingSet)
+```
+
+
+#### IDTAXA
+The identical set of ASV sequences were classified with IDTAXA. We set the confidence threshold to 40, as based on previous unpublished tests this gave us most similarity with classification with SILVA using the default QIIME classification. 
+
+Note that this step takes several hours to run.
+```{r eval=F}
+parseTax <- function(taxes) {
+  trained <- list()
+  for (t in taxes) {
+    print(t)
+    train_i <- IdTaxa(test=asv_seqs, trainingSet=get(t), strand="top", threshold=40, processors = 24)
+    
+    trained = c(trained, list(train_i))
+    names(trained)[length(trained)] <- paste0('tax-',t)
+  }
+  return(trained)
+}
+trained_sets <- parseTax(taxes=ls(pattern = "silva_138"))
+
+##change this!
+save(trained_sets, file="trained_sets.Rdata")
+
+```
+
+
+```{r}
+load("trained_sets.Rdata")
+```
+
+
+#### Parsing results
+
+The previous classifier step produced a list of two different classified sets, itself a list. In other words, `trained_sets` is a list of two lists each ~65000 long for the ~65000 ASVs. For easier handling, this list was transformed into a single table with the Domain-Species classification as columns, with two rows for each ASV, one for each training set.
+
+Note that the IDTAXA default output has ragged ends, e.g. an ASV classified to the 4th rank is a vector of length 4, not a vector of length 7 with 3 trailing NAs. We also introduced a new terminology prefix of "unspecified_", parallel to IDTAXA's use of "unclassified_". This distinction is discussed at length in the manuscript, but we note that "unspecified_" is useful to distinguish between a lower rank not receiving annotation due to conflict between differently-named references ("unclassified_") or due to a lack of annotation in any reference sequences ("unspecified_") as is the case for many poorly-studied environmental groups, e.g. SR1. 
+
+After adding in the "unspecified_" prefix to the next lowest rank to allow future disambiguation between "unclassified" and "unspecified", we solved the ragged problem by propagating the lowest annotated rank downwards. Beyond its usual purposes, this propagation step also ensures that the unclassified/unspecified distinction is preserved and not merged at lower steps.
+```{r}
+ranks <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+tax_tab <- data.frame()
+for (t in 1:length(trained_sets)){
+  new_mat <- lapply(trained_sets[[t]], function(x) {
+    taxa <- x$taxon[-1]
+    
+    # add 'unspecified_' prefix one rank down if assigned a ragged taxonomy
+    if (length(taxa) < length(ranks) && !(grepl("unclassified_",taxa[length(taxa)]))){
+      taxa <- c(taxa, paste0("unspecified_",taxa[length(taxa)]))
+    }
+    
+    # propagate lowest rank of any taxa with ragged ends
+    taxa <- c(taxa, rep(taxa[length(taxa)], max(0,length(ranks)-length(taxa))))   # FULL PROPAGATING DOWN
+
+    taxa <- taxa[1:length(ranks)]  # pesky euks
+    })
+  new_mat <- cbind(Method=gsub("^.*silva_(.*_[a-z])[a-z]*$","\\1", names(trained_sets)[t]), ASV=names(new_mat),
+                   data.frame(matrix(unlist(new_mat), ncol=length(ranks), byrow = T)))
+  
+  tax_tab <- rbind(tax_tab, new_mat)
+  rm(new_mat)
+}
+
+
+counts_tab <- left_join(asv_counts, tax_tab, copy=T)
+colnames(counts_tab)[grep('^X[1-7]$', colnames(counts_tab))] <- ranks
+counts_tab <- counts_tab %>% group_by(Sample, Method) %>% mutate(Relabund = 100*(Count/sum(Count)))
+counts_tab$Method <- gsub("^.*silva_(.*_[a-z])[a-z]*$","\\1", counts_tab$Method)
+```
+
+```{r eval=F}
+##change this!
+write.table(counts_tab, "ASV_counts-PROCESSED.tsv", sep="\t", quote=F, col.names=NA)
+```
+
+
+Metadata from the supplemental table is then read in (if available) and the ASV table is formatted accordingly.
+
+```{r}
+counts_tab <- read.csv("ASV_counts-PROCESSED.tsv", sep="\t", row.names = 1)
+s1 <- read.csv("supplementals/Table_S1.csv")
+counts_tab$Sample <- gsub(".16SF.*$","", gsub("^.*quince", "needham_", counts_tab$Sample))
+
+counts_tab$Dataset[counts_tab$Dataset == "fouhy"] <- 'Fouhy et al'
+counts_tab$Dataset[counts_tab$Dataset == "kozich"] <- 'Kozich et al'
+counts_tab$Dataset[counts_tab$Dataset == "mlw"] <- 'Mono Lake water'
+counts_tab$Dataset[counts_tab$Dataset == "seagrass"] <- 'Seagrass'
+counts_tab$Dataset[counts_tab$Dataset == "needham"] <- 'Marine water'
+counts_tab$Dataset[counts_tab$Dataset == "seeps"] <- 'Methane seep'
+counts_tab$Dataset[counts_tab$Dataset == "pesca"] <- 'Hydrothermal vent'
+counts_tab$Dataset[counts_tab$Dataset == "soil"] <- 'Soil'
+
+counts_tab$Method[counts_tab$Method == "138.2_c"] <- 'CABO-16S'
+counts_tab$Method[counts_tab$Method == "138.2_o"] <- 'SILVA 138.2'
+
+counts_tab$Dataset <- factor(counts_tab$Dataset, levels=c("Fouhy et al", "Kozich et al", "Soil","Methane seep", "Hydrothermal vent", "Seagrass", "Marine water", "Mono Lake water"))
+counts_tab$Method <- factor(counts_tab$Method, levels=rev(unique(counts_tab$Method)))
+
+counts_tab$Sample <- factor(counts_tab$Sample, unique(s1$Sample[s1$Sample %in% counts_tab$Sample]))
+```
+
+
+### Plots for benchmarking
+
+#### Fig 2 - Classified / Unclassified
+Overview of how many ASVs are classified or not with each training set.
+
+```{r}
+percclass <- counts_tab %>% ungroup() %>% select(Dataset, Method, ASV, Domain:Species) %>%  # drop samples
+  group_by(Dataset) %>% mutate(Dataset=paste0(Dataset, " (", length(unique(ASV)), ")")) %>%
+  group_by(Dataset, Method) %>% unique() %>%  # unique to only count ASVs once
+  summarise(across(Domain:Species,  ~ 100*sum(!grepl('nclassified|nspecified', .x))/length(.x))) %>%
+  melt(id.vars = c('Dataset','Method'), measure.vars = c('Domain','Phylum','Class','Order','Family','Genus','Species'), 
+       variable.name = 'taxlevel', value.name='Perc') 
+
+dset_namer <- setNames(unique(percclass$Dataset), gsub(" \\(.*$","", unique(percclass$Dataset)))  
+percclass$Dataset = factor(percclass$Dataset, 
+                           levels=dset_namer[levels(counts_tab$Dataset)])
+  
+
+
+p0 <- ggplot(percclass, aes(x=taxlevel)) +
+            geom_ribbon(data=percclass %>% group_by(Dataset, taxlevel) %>% summarise(minp=min(Perc), maxp=max(Perc)),
+                        aes(ymin=minp, ymax=maxp, fill=Dataset, group=Dataset), alpha=0.1, show.legend = F) +
+            geom_line(aes(y=Perc, linetype=Method, color=Dataset, group=interaction(Method,Dataset))) +
+            # geom_text(data= unique(counts_tab[,c("Dataset","ASV")]) %>% group_by(Dataset) %>%
+            #             summarise(nASVs=paste0(unique(Dataset),": ", format(length(ASV), big.mark=","), " ASVs")) %>%
+            #             mutate(Dataset=factor(Dataset, levels=rev(levels(Dataset)))),
+            #            x='Domain', aes(y=as.numeric(Dataset)*5.5, label=nASVs, color=Dataset), 
+            #           hjust=0, size=3.6, show.legend = F) +
+            scale_y_continuous(expand = expansion(c(0,0))) + scale_x_discrete(expand = c(0.01,0.1)) +
+            labs(y='ASVs with taxonomy assigned (%)', x='', color='Dataset (n. ASVs)') +
+            scale_color_manual(values = stock_colors) + scale_fill_manual(values = stock_colors) + 
+            ggtheme + theme(legend.margin=margin(b=0.3, t=0.3), axis.title.x = element_blank())
+
+p0
+```
+
+
+```{r}
+p1 <- counts_tab %>% ungroup() %>% select(Dataset, Method, ASV, Domain:Species) %>%
+  group_by(Dataset, Method) %>% unique() %>%
+  summarise(across(Domain:Species,  ~ sum(grepl('nclassified|nspecified', .x)))) %>%
+  melt(id.vars = c('Dataset','Method'), measure.vars = c('Domain','Phylum','Class','Order','Family','Genus','Species'), 
+       variable.name = 'taxlevel', value.name='Count') %>% 
+  ggplot(aes(x=Method, y=Count, fill=Dataset)) +
+  labs(y='Num. ASVs unassigned') + 
+  facet_grid(.~taxlevel, space='free_x', scales='free_y') +
+  geom_col(position='stack') + scale_y_continuous(expand = expansion(c(0,0.05))) +
+  scale_fill_manual(values = stock_colors) + ggtheme_rot 
+p1
+```
+
+
+```{r}
+p2 <- counts_tab %>% ungroup() %>% select(Dataset, Method, ASV, Domain:Species) %>%
+  group_by(Dataset, Method) %>% unique() %>%
+  summarise(across(Domain:Species,  ~ 100*sum(grepl('nclassified|nspecified', .x))/length(.x))) %>%
+  group_by(Dataset) %>% summarise(across(Domain:Species,  ~ .x[1] - .x[2])) %>%  # silva - cabo
+  melt(id.vars = c('Dataset'), measure.vars = c('Domain','Phylum','Class','Order','Family','Genus','Species'),
+       variable.name = 'taxlevel', value.name='Difference') %>%
+  mutate(taxlevel=factor(taxlevel, rev(levels(taxlevel)))) %>%
+  ggplot(aes(y=taxlevel, x=Difference, fill=Dataset)) +
+  geom_col(position='dodge') + 
+  labs(y='', x='Difference of % ASVs unclassified\n(SILVA 138.2 - CABO-16S)') +
+  guides(fill='none')+
+  scale_fill_manual(values = stock_colors) + ggtheme_rot
+p2
+```
+
+
+These three subpanels were stitched together for the manuscript
+```{r fig.width=10, fig.height=6}
+#gridExtra::grid.arrange(p0, p1 + guides(fill='none'), p2, nrow=2, layout_matrix=matrix(c(1,1,1,2,2,3), nrow=2, byrow = T))
+
+g <- gridExtra::grid.arrange(p0, p1 + guides(fill='none'), p2, nrow=2, layout_matrix=matrix(c(1,1,1,2,2,3), nrow=2, byrow = T))
+ggsave("figures/fig2_grid.pdf", g, width=10, height=6)
+
+```
+
+
+
+#### Fig 3 - Taxonomic agreement
+
+Do the taxonomic profiles look overall similar? I.e. are the taxa that are unclassified or differently classified minor ones?
+
+```{r fig.width=14, fig.height=7}
+minmax <- 5  # classes must have at least 5% abundance to be included
+
+sub_tax <- 'Class'
+maxclass <- 'Domain'
+df_class <- counts_tab[grep("", counts_tab$Dataset, invert=F),] %>% 
+  group_by(Sample, Dataset, Method, across(maxclass:sub_tax)) %>% summarise(Relabund = sum(Relabund)) %>% 
+  group_by(across(sub_tax)) %>% 
+  mutate(Class=ifelse((max(Relabund) < minmax) & (!grepl("nclassified", Class)), 'Classified, <5%', Class)) %>% 
+  mutate(Class=ifelse((max(Relabund) < minmax) & (grepl("nclassified", Class)), 'Unclassified, <5%', Class)) %>% 
+  group_by(across(maxclass:sub_tax), Sample, Dataset, Method) %>% summarise(Relabund = sum(Relabund)) %>% 
+  group_by(across(sub_tax)) %>% filter(max(Relabund) >= minmax) %>% ungroup() %>%
+  arrange(Class) %>%
+  mutate(Class=factor(Class, c(unique(Class)[!grepl("5%", unique(Class))],'Classified, <5%', 'Unclassified, <5%'))) %>%
+  mutate(Sample=factor(gsub("^[a-z]*_","", as.character(Sample)), levels=gsub("^[a-z]*_","", levels(Sample)))) %>%
+  mutate(Dataset = factor(gsub(" et al","", Dataset), levels=gsub(" et al", "", levels(Dataset))))
+
+df_class$Class <- factor(gsub(":plas$","", as.character(df_class$Class)),
+                        levels = gsub(":plas$","", levels(df_class$Class)))
+
+# assign colors to all with some extras, then rearrange as needed
+classcols <- setNames(c(stock_colors[1:min(length(stock_colors), length(levels(df_class$Class)))], 
+                                        '#8a9a00', '#903a3a','#9aAaBa','black', '#ba9aaa', '#9abaaa','gray40'),
+                                      levels(df_class$Class))
+classcols['Classified, <5%'] <- classcols['unclassified_Bacteria']
+classcols['unclassified_Bacteria'] <- 'gray30'
+classcols['unclassified_Root'] <- 'black'
+
+# now that colors are set, re-organize class by domain + phylum
+df_class$Class <- factor(df_class$Class, unique(df_class$Class[order(df_class$Domain, df_class$Phylum, df_class$Class)]))
+df_class$Class <- factor(df_class$Class, 
+                         c(grep("5%|unclassified_Bacteria|unclassified_Root", levels(df_class$Class), value=T, invert = T), 
+                           'Classified, <5%','Unclassified, <5%', 'unclassified_Bacteria','unclassified_Root'))
+
+
+ggplot(df_class, aes(x=Sample, y=Relabund, fill = Class)) +
+  geom_col() +  scale_y_continuous(expand = expansion(c(0,0.0))) +
+  facet_grid(Method~Dataset, scales = 'free', space='free') +
+  labs(y="Relative abundance (%)", x='') +
+  scale_fill_manual(values = classcols) + 
+  ggtheme_rot + theme(legend.position = 'bottom') + guides(fill=guide_legend(ncol=8))
+
+ggsave('figures/Fig3.pdf', width=14, height=7)
+```
+ 
+ 
+#### Fig 4 - Alluvial of chloroplast and cyanobacteria
+
+To compare how ASVs were classified based on the two databases, we subset the data to just the marine coastal water dataset (enriched in a diversity of eukaryotic phytoplankton as well as cyanobacteria). Within this set, we focused on the families with at least 100 ASVs.
+
+```{r fig.width=12, fig.height=7}
+group_level <- 'Phylum'
+group_tax <- 'Cyano|:plas|unclass'
+sub_tax <- 'Family'
+minmax <- 100
+
+alluvial <- counts_tab %>% filter(grepl(group_tax, Phylum) | is.na(Phylum)) %>% filter(grepl('Marine', Dataset)) %>%
+  filter(Relabund >= 0) %>%
+  group_by(Method, across(Domain:sub_tax)) %>% summarise(Relabund = length(unique(ASV))) %>% 
+  group_by(across(sub_tax)) %>% filter(max(Relabund) > minmax) %>% ungroup() %>% 
+  mutate(across(Phylum:sub_tax, function(x) ifelse(grepl("unclassified_",x), NA, x))) %>%
+  mutate(across(Phylum:sub_tax, function(x) ifelse(grepl("unspecified_",x), NA, x))) %>%
+  arrange(across(Domain:sub_tax)) %>% 
+  gather_set_data(c('Domain','Phylum','Class','Order','Family')) %>% 
+  mutate(y = ifelse(is.na(y), '', y)) %>%
+  arrange(across(Domain:sub_tax)) %>%
+  mutate(y=gsub(':plas','', y)) %>%
+  mutate(y=factor(y, c(unique(y)[!(unique(y) == '')], unique(y)[(unique(y) == '')]))) %>%
+  mutate(Phylum = factor(Phylum, unique(Phylum[order(y)])))
+
+sepmult=0.15
+
+ggplot(alluvial, aes(x, id=id, split=y, value=Relabund)) +
+  facet_grid(Method~., space='free_y', scales='free_y') +
+  geom_parallel_sets(aes(fill=Phylum), na.rm=F, sep=sepmult) +
+  geom_parallel_sets_axes(axis.width=0.05, fill='gray20', sep=sepmult) +
+  geom_parallel_sets_labels(colour='black', angle = 0, size=4, nudge_y = 600, sep=sepmult) +
+  scale_fill_manual(values=rainbow(length(levels(alluvial$Phylum)), s=0.44, v=0.9)) +
+  ggtheme
+
+ggsave('figures/Fig4_plastids.pdf', width=12, height=7)
+```
+
+
+
+#### Fig 5 - Improving resolution in SEEP-SRB
+
+As CABO-16S is a merge of SILVA and PR2, we also took the opportunity to merge in some full-length unpublished sequences the Orphan lab has accued over time. Particularly, these include a set of SEEP-SRB1 sequences curated by Ranjani Murali in the process of her recent [paper exploring the diversity of SEEP-SRB1](https://journals.plos.org/plosbiology/article?id=10.1371/journal.pbio.3002292). SEEP-SRB1 evolution and ecophysiology is complicated, and the group is polyphyletic despite being ranked by SILVA as a genus. Notably, SEEP-SRB1 contains many subgroups such as SEEP-SRB1a, SEEP-SRB1g, etc. As these were included, we assessed whether sequences labelled as "Desulfosarcinaceae" or "SEEP-SRB1" were able to be annotated more specifically (i.e., down to the sub-group like Seep-SRB1a). Note that we also included the genus LCP-80 as a focus taxon, as this is the label assigned by SILVA to the group including the sequences most closely related to Seep-SRB1g.
+
+First, we compared how the view of the overall community composition would change based on each database:
+
+```{r fig.width=14, fig.height=7}
+group_level <- 'Genus'
+group_tax <- 'SRB1|LCP-80|unclassified_Desulfosarc|Desulfosudis'
+sub_tax <- 'Species'
+minmax <- 0.5
+
+srbcols <- setNames(c("#8DD3C7", "#BC80BD", "#BEBADA", "#FB8072", "#80B1D3", "#FDB462", "#B3DE69", "#8f9faa", "#D9D9D9",
+                      "#FFFFB3", "#CCEBC5","#FCCDE5"), #c(RColorBrewer::brewer.pal(11,'Set3')),
+                    c("Seep-SRB1g","unclassified_Desulfosarcinaceae","unspecified_Desulfosudis","Seep-SRB1a","Seep-SRB1d",
+                      "unclassified_SEEP-SRB1","unspecified_Desulfosarcinaceae","unspecified_SEEP-SRB1",
+                      "unspecified_Sva0081 sediment group","unclassified_Desulfobacterales","unspecified_Desulfonatronobacter",
+                      "Seep-SRB1c"))
+
+p <- counts_tab %>% filter(grepl(group_tax, Genus)) %>% filter(grepl("seep|vent", Dataset)) %>%   # only look at seep/vent
+  group_by(Sample, Dataset, Method, across(sub_tax)) %>% summarise(Relabund = sum(Relabund)) %>% 
+  group_by(across(sub_tax)) %>% filter(max(Relabund) >= minmax) %>%  # drop SRB with less than 0.5% abundance
+  group_by(Sample) %>% filter(max(Relabund) >= minmax) %>% # drop nearly empty samples
+  ggplot(aes(x=Sample, y=Relabund, fill = Species)) +
+  geom_col(position='stack', width=0.8) + ggh4x::facet_nested(Species~Dataset + Method, scales = 'free', space='free') +
+  scale_fill_manual(values = srbcols) + 
+  scale_y_continuous(expand=c(0,0)) +
+  ggtheme + theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5))
+
+p
+```
+
+Secondly, we made an alluvial diagram to track how ASVs were classified across ranks from family through species with SILVA 138.2 (left three columns) to their classification from species through family with CABO-16S (right three columns).
+
+We defined the set of ASVs to visualize as those annotated by SILVA 138.2 as "SEEP-SRB1", "LCP-80", and "unclassified_Desulfosarcinaceae" as these were the most likely groups to contain bona fide SEEP-SRB1 ASVs. 
+```{r}
+cabo <- counts_tab %>% filter(Method == "CABO-16S")%>% select(Family, Genus, Species, ASV)  %>% unique()
+silva <- counts_tab %>% filter(Method == "SILVA 138.2") %>% select(Family, Genus, Species, ASV) %>% unique()
+
+srb <- merge(silva, cabo, by='ASV', all=T, suffixes=c('.SILVA', '.CABO'))
+srb <- srb[grepl('SEEP-SRB1|unclassified_Desulfosarcinaceae|Desulfosudis', srb$Genus.SILVA),]
+srb$value <- 1
+srb <- srb[c('ASV', 'Family.SILVA','Genus.SILVA','Species.SILVA','Species.CABO','Genus.CABO','Family.CABO','value')]
+```
+
+```{r fig.width=12, fig.height=7}
+sepmult=0.15
+
+srbcols <- setNames(c("#8DD3C7", "#BC80BD", "#BEBADA", "#FB8072", "#80B1D3", "#FDB462", "#B3DE69", "#8f9faa", "#D9D9D9",
+                      "#FFFFB3", "#CCEBC5","#FCCDE5"), #c(RColorBrewer::brewer.pal(11,'Set3')),
+                    c("Seep-SRB1g","unclassified_Desulfosarcinaceae","unspecified_Desulfosudis","Seep-SRB1a","Seep-SRB1d",
+                      "unclassified_SEEP-SRB1","unspecified_Desulfosarcinaceae","unspecified_SEEP-SRB1",
+                      "unspecified_Sva0081 sediment group","unclassified_Desulfobacterales",
+                      "unclassified_Thermodesulfobacteriota","Seep-SRB1c"))
+
+q <- gather_set_data(srb, 2:7) %>%
+  arrange(across(Family.SILVA:Family.CABO)) %>%
+  mutate(y=factor(y, c(unique(y)[!(unique(y) == '')], unique(y)[(unique(y) == '')]))) %>%
+  mutate(Species.CABO = factor(Species.CABO, unique(Species.CABO[order(y)]))) %>%
+  
+  ggplot(aes(x, id=id, split=y, value=value)) +
+  geom_parallel_sets(aes(fill=Species.CABO), na.rm=F, sep=sepmult) +    
+  geom_parallel_sets_axes(axis.width=0.05, fill='gray20', sep=sepmult) +
+  geom_parallel_sets_labels(colour='black', angle = 0, size=4, nudge_y = 10, sep=sepmult) +
+  scale_fill_manual(values = srbcols, na.value = 'grey30') +
+  ggtheme
+q  
+
+```
+
+
+For the manuscript, these two panels were again stitched together.
+```{r fig.width=12, fig.height=12}
+#gridExtra::grid.arrange(p, q + guides(fill='none'), nrow=2, heights=c(3,2))   # height  12 if 3 panel
+g <- gridExtra::grid.arrange(p, q + guides(fill='none'), nrow=2, heights=c(3,2))   # height  12 if 3 panel
+ggsave("figures/fig5_srb_grid.pdf",g, width=12, height=12)
+```
+
+
+
+#### Supplemental SRB figure:
+
+We also performed the inverse query (subsetting by the same query but on their classification with CABO-16S) to ensure there was no substantial difference based on direction.
+```{r}
+srb <- merge(silva, cabo, by='ASV', all=T, suffixes=c('.SILVA', '.CABO'))
+srb <- srb[grepl('SEEP-SRB1|LCP-80|unclassified_Desulfosarc', srb$Genus.CABO),]
+srb$value <- 1
+srb <- srb[c('ASV', 'Family.SILVA','Genus.SILVA','Species.SILVA','Species.CABO','Genus.CABO','Family.CABO','value')]
+```
+
+```{r fig.width=12, fig.height=7}
+sepmult=0.15
+
+srbcols <- setNames(c("#8DD3C7", "#BC80BD", "#BEBADA", "#FB8072", "#80B1D3", "#FDB462", "#B3DE69", "#8f9faa", "#D9D9D9",
+                      "#FFFFB3", "#CCEBC5","#FCCDE5"), #c(RColorBrewer::brewer.pal(11,'Set3')),
+                    c("Seep-SRB1g","unclassified_Desulfosarcinaceae","unspecified_LCP-80","Seep-SRB1a","Seep-SRB1d",
+                      "unclassified_SEEP-SRB1","unspecified_Desulfosarcinaceae","unspecified_SEEP-SRB1",
+                      "unspecified_Sva0081 sediment group","unclassified_Desulfobacterales","unspecified_Desulfonatronobacter",
+                      "Seep-SRB1e"))
+
+q2 <- gather_set_data(srb, 2:7) %>%
+  arrange(across(Family.SILVA:Family.CABO)) %>%
+  mutate(y=factor(y, c(unique(y)[!(unique(y) == '')], unique(y)[(unique(y) == '')]))) %>%
+  mutate(Species.CABO = factor(Species.CABO, unique(Species.CABO[order(y)]))) %>%
+  
+  ggplot(aes(x, id=id, split=y, value=value)) +
+  geom_parallel_sets(aes(fill=Species.CABO), na.rm=F, sep=sepmult) +    
+  geom_parallel_sets_axes(axis.width=0.05, fill='gray20', sep=sepmult) +
+  geom_parallel_sets_labels(colour='black', angle = 0, size=4, nudge_y = 20, sep=sepmult) +
+  scale_fill_manual(values = srbcols, na.value = 'grey30') +
+  ggtheme
+q2  
+
+```
+

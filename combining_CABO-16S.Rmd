@@ -1,0 +1,275 @@
+---
+title: "Combining SILVA 138.2, PR2 5.0.0, and custom sequences for CABO-16S"
+author: "Eitel et al. 2024"
+date: "2023-09-13"
+output:
+  html_document:
+      toc: true
+      toc_depth: 5
+      toc_float:
+        collapsed: true
+---
+### Set working directory
+```{r setup, include=T}
+working_dir="/export/data1/projects/tagdb_public/"
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = working_dir)
+
+### RUN THIS LINE IN THE CONSOLE AGAIN:
+setwd(working_dir)
+```
+###Libraries
+```{r message=F, warning=F}
+library(dplyr)
+library(tidyverse)
+library(ShortRead)
+library(readxl)
+library(vegan)
+library(Biostrings)
+library(seqinr)
+library(DECIPHER)
+```
+
+### SILVA 138.2
+
+###Downloading SILVA-138.2
+```{bash eval=F}
+#web download
+wget https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/quality/SILVA_138.2_SSURef_Nr99.quality.gz
+wget https://www.arb-silva.de/fileadmin/silva_databases/release_138_2/Exports/SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz
+wget https://www.arb-silva.de/fileadmin/silva_databases/release_138_2/Exports/taxonomy/taxmap_slv_ssu_ref_nr_138.2.txt.gz
+
+#unzip
+gunzip SILVA_138.2_SSURef_Nr99.quality.gz
+gunzip SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz
+gunzip taxmap_slv_ssu_ref_nr_138.2.txt.gz
+```
+
+### Replace uracil (U) with thymine (T)
+```{bash eval=F}
+sed -i"" '/>/!s/U/T/g' SILVA_138.2_SSURef_NR99_tax_silva.fasta
+```
+
+###Filtering SILVA-138.2 quality
+#Pintail value < 50 or an alignment quality value < 75 have been assigned to color group 1 in ARB (red). These sequences of decreased quality should be removed when making new training sets
+```{r}
+#import silva-138.2
+silva_1382 <- readDNAStringSet('SILVA_138.2_SSURef_NR99_tax_silva.fasta',format="fasta")
+writeXStringSet(silva_1382,file="SILVA_138.2_SSURef_NR99_tax_silva.txt",format="fasta",width=9000)
+silva_1382 <- read.csv('SILVA_138.2_SSURef_NR99_tax_silva.txt', sep="\t", header=F, quote='') 
+silva_1382<-data.frame(full_tax = silva_1382$V1[c(TRUE, FALSE)], 
+           sequence = silva_1382$V1[c(FALSE, TRUE)])
+silva_1382$accession<-sub("\\s.*","",silva_1382$full_tax)
+silva_1382$full_tax<-sub(".*?\\s","",silva_1382$full_tax)
+silva_1382$accession<-sub(">", "", silva_1382$accession) #510495 seqs
+
+
+#determine good quality sequences
+quality<-read.csv('SILVA_138.2_SSURef_Nr99.quality', sep="\t", header=T, quote='')
+quality$accession<-paste0(quality$Primary.Accession,".",quality$Start,".",quality$Stop)
+quality$Pintail.Quality<-ifelse(quality$Pintail.Quality=="NULL","100",quality$Pintail.Quality)
+quality$Pintail.Quality<-as.numeric(quality$Pintail.Quality)
+quality<-quality[quality$Pintail.Quality>=50, ] #449170 remain
+quality<-quality[quality$Alignment.Quality>=75, ] #446873 remain
+
+#filter silva-138.2 by quality
+silva_1382<-silva_1382[silva_1382$accession %in% quality$accession,] #446873
+```
+
+### SILVA taxonomy
+```{r}
+#import taxonomy
+silva.names<-read.csv("taxmap_slv_ssu_ref_nr_138.2.txt", sep="\t", header=T, quote='')
+silva.names$accession<-paste0(silva.names$primaryAccession,".",silva.names$start,".",silva.names$stop)
+silva.names<-subset(silva.names,select=c(accession,path,organism_name))
+
+#merge taxonomy with filtered sequences
+silva.names<-merge(silva_1382,silva.names,by="accession") #446873
+
+#remove plastids
+#Chloroplasts not removed in simplified SILVA 138.2
+silva.names<-silva.names[!grepl("Chloroplast",silva.names$path),]  #436790
+silva.names<-silva.names[!grepl("Mitochondria",silva.names$path),] #435918
+
+#make Euk out group
+silva.names.Euk<-silva.names[grepl("^Euk",silva.names$path),] #27566
+set.seed(100)
+silva.names.Euk <- sample_n(silva.names.Euk, 100)
+
+#remove Euks
+silva.names<-silva.names[!grepl("^Euk",silva.names$path),] #408352
+
+
+#separate taxonomy to ranks
+silva.names<-subset(silva.names,select=c(accession,path,organism_name))
+silva.names<-splitstackshape::cSplit(silva.names,'path',';')
+
+#convert 'organism_name' to species
+silva.names$path_7<-silva.names$organism_name
+
+#simplify species names
+silva.names$path_7<-ifelse(grepl("[Uu]ncult",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("^bacterium",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("^cyanobacterium",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-sub("\\[","",silva.names$path_7)
+silva.names$path_7<-sub("\\]","",silva.names$path_7)
+silva.names$path_7<-sub("\\'","",silva.names$path_7)
+silva.names$path_7<-sub("\\'.*","",silva.names$path_7)
+silva.names$path_7<-sub("subsp.*","",silva.names$path_7)
+silva.names$path_7<-sub("Candidatus ","Candidatus_",silva.names$path_7)
+
+
+#split path_7 into genus and species
+silva.names<-silva.names %>% separate(path_7,c("path_7a","path_7b")," ",extra="merge")
+
+#filter extra text and get first string from path_6 genus
+silva.names$path_6b<-sub("\\[","",silva.names$path_6)
+silva.names$path_6b<-sub("\\]","",silva.names$path_6b)
+silva.names$path_6b<-sub("Candidatus ","Candidatus_",silva.names$path_6b)
+silva.names<-silva.names %>% separate(path_6b,c("path_6a","path_6b")," ",extra="merge")
+
+#match genus from organism_name with genus from path_6
+silva.names$match<-ifelse(str_detect(silva.names$path_6a,silva.names$path_7a),"TRUE","FALSE")
+#if genus match then keep the species, if not then remove
+silva.names$path_7<-ifelse(silva.names$match=="TRUE",silva.names$path_7b,NA)
+#add in species if found in path_6 ie [Eubacterium] oxidoreducens
+silva.names$path_7<-ifelse(grepl("\\[",silva.names$path_6) & is.na(silva.names$path_7),silva.names$path_6b,silva.names$path_7)
+#remove [] and species group from genus
+silva.names$path_6<-ifelse(grepl("\\[",silva.names$path_6),silva.names$path_6a,silva.names$path_6)
+#separate species to remove strain, ect
+silva.names<-silva.names %>% separate(path_7,c("path_7","path_7extra")," ")
+#special cases cf. and aff.
+silva.names$path_7<-ifelse(grepl("cf.|aff.",silva.names$path_7),silva.names$path_7extra,silva.names$path_7)
+
+#remove more non-specific species names
+silva.names$path_7<-ifelse(grepl("^\\(",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("syringae",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("[Gg]roup",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("\\.",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("symbiont",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("metagenome",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("bacterium",silva.names$path_7),NA,silva.names$path_7)
+silva.names$path_7<-ifelse(grepl("-like",silva.names$path_7),NA,silva.names$path_7)
+
+#remove all but final columns
+silva.names<-subset(silva.names,select=-c(path_6a,path_6b,path_7a,path_7b,match,organism_name,path_7extra))
+
+#clean up SILVA taxonomy
+silva.names$path_7<-ifelse(silva.names$path_6=="endosymbionts",NA,silva.names$path_7)
+silva.names$path_6<-ifelse(silva.names$path_6=="endosymbionts",NA,silva.names$path_6)
+
+silva.names$path_5<-sub("Unknown Family","Incertae Sedis",silva.names$path_5)
+silva.names$path_6<-ifelse(grepl("Incertae Sedis",silva.names$path_6) & is.na(silva.names$path_7),NA,silva.names$path_6)
+silva.names$path_5<-ifelse(grepl("Incertae Sedis",silva.names$path_5) & is.na(silva.names$path_6),NA,silva.names$path_5)
+silva.names$path_4<-ifelse(grepl("Incertae Sedis",silva.names$path_4) & is.na(silva.names$path_5),NA,silva.names$path_4)
+silva.names$path_3<-ifelse(grepl("Incertae Sedis",silva.names$path_3) & is.na(silva.names$path_4),NA,silva.names$path_3)
+silva.names$path_2<-ifelse(grepl("Incertae Sedis",silva.names$path_2) & is.na(silva.names$path_3),NA,silva.names$path_2)
+
+silva.names$path_2<-ifelse(grepl("^Incertae Sedis",silva.names$path_2),paste0(silva.names$path_1," Incertae Sedis"),silva.names$path_2)
+silva.names$path_3<-ifelse(grepl("^Incertae Sedis",silva.names$path_3),paste0(silva.names$path_2," Incertae Sedis"),silva.names$path_3)
+silva.names$path_3<-sub("Incertae Sedis Incertae Sedis","Incertae Sedis",silva.names$path_3)
+silva.names$path_4<-ifelse(grepl("^Incertae Sedis",silva.names$path_4),paste0(silva.names$path_3," Incertae Sedis"),silva.names$path_4)
+silva.names$path_4<-sub("Incertae Sedis Incertae Sedis","Incertae Sedis",silva.names$path_4)
+silva.names$path_5<-ifelse(grepl("^Incertae Sedis",silva.names$path_5),paste0(silva.names$path_4," Incertae Sedis"),silva.names$path_5)
+silva.names$path_5<-sub("Incertae Sedis Incertae Sedis","Incertae Sedis",silva.names$path_5)
+```
+
+###Simplify Euk out group taxonomy
+```{r}
+silva.names.Euk<-subset(silva.names.Euk,select=c(accession,path))
+silva.names.Euk<-splitstackshape::cSplit(silva.names.Euk,'path',';')
+silva.names.Euk<-subset(silva.names.Euk,select=c(accession,path_01))
+silva.names.Euk<-cbind(silva.names.Euk,matrix(NA,ncol=6))
+colnames(silva.names.Euk)<-c("accession","path_1","path_2","path_3","path_4","path_5","path_6","path_7")
+```
+
+###Create new Silva-138.2 fasta
+```{R}
+#combine Proks and Euks
+silva.names<-rbind(silva.names,silva.names.Euk) #408171
+
+#create updated taxonomic name
+silva.names$new_tax<-paste0(silva.names$accession," Root;",silva.names$path_1,";",silva.names$path_2,";",silva.names$path_3,";",silva.names$path_4,";",silva.names$path_5,";",silva.names$path_6,";",silva.names$path_7,";")
+silva.names<-subset(silva.names,select=c(accession,new_tax))
+silva.names$new_tax<-gsub("NA;","",silva.names$new_tax)
+
+silva_1382_new<-merge(silva.names,silva_1382,by="accession")
+silva_fasta<-subset(silva_1382_new,select=c(new_tax,sequence))
+
+#to write as fasta:
+#write.fasta(as.list(silva_1382_new$sequence),silva_1382_new$new_tax,"Silva_1382nr99_P50A75_100Euks_noChl_20241010.fasta")
+```
+
+### Add PR2 sequences
+```{r}
+#https://pr2database.github.io/pr2database/articles/pr2database.html
+#install.packages(devtools)
+#devtools::install_github("pr2database/pr2database")
+library("pr2database") 
+pr2 <- pr2_database() #221085
+
+#to see how many :plas,mito,apic,chrom,nulc
+cat("plastids: ",nrow(pr2[grepl("*:plas",pr2$domain),]),"\n") #6668
+cat("mitochondrion: ",nrow(pr2[grepl("*:mito",pr2$domain),]),"\n") #1843
+#cat("nucleomorph: ",nrow(pr2[grepl("*:nucl",pr2$domain),]),"\n") #148
+cat("apicoplast: ",nrow(pr2[grepl("*:apic",pr2$domain),]),"\n") #22
+cat("chromatophore: ",nrow(pr2[grepl("*:chro",pr2$domain),]),"\n") #7
+cat("total colons: ",nrow(pr2[grepl("*:",pr2$domain),]),"\n") #8688
+
+```
+
+```{r}
+pr2<-pr2[grepl("*:p|*:m|*:a|*:c",pr2$domain),] #8540 remain
+
+#remove genus from species
+pr2$species<-sub(".*_","",pr2$species)
+#remove non-specified species
+pr2$species<-sub("^sp.:","",pr2$species)
+
+#create updated taxonomic name
+pr2$new_tax<-paste0(pr2$pr2_accession," Root;", pr2$domain,";",pr2$division,";",pr2$class,";",pr2$order,";",pr2$family,";",pr2$genus,";",pr2$species,";")
+pr2$new_tax <- gsub(";;*$", ";", pr2$new_tax)
+
+# drop all but one trailing sequential _X type taxon
+pr2$new_tax <- unlist(lapply(strsplit(pr2$new_tax, ";"), 
+                             function(x) { 
+                               a = !grepl("_X*:[a-z]", x); 
+                               trimmed=F; 
+                               for (z in rev(seq(length(a)))) { 
+                                 if(a[z]) {a=(0*a) == 0; break} 
+                                 else {a = a[-z]; trimmed=T}}
+                               if (trimmed){a=c(a,TRUE)}
+                               paste0(paste0(x[which(a)], collapse = ";") ,";")
+                            }))
+
+# fix if the _X is a duplication of preceding level
+pr2$new_tax <- unlist(lapply(strsplit(pr2$new_tax, ";"), 
+                             function(x) {
+                               if(gsub("_X*(:[a-z]*)", "\\1", x[length(x)]) == x[length(x)-1]) {x=x[1:(length(x)-1)]} 
+                               paste0(paste0(x, collapse = ";") ,";") } ))
+
+pr2_fasta<-subset(pr2,select=c(new_tax,sequence))
+```
+
+###Add Custom sequences
+```{r}
+custom_fasta <- read.csv('orphan.seq_1200bp_20241014.fasta', sep="\t", header=F, quote='')
+custom_fasta<-data.frame(V1 = custom_fasta$V1[c(TRUE, FALSE)], 
+           sequence = custom_fasta$V1[c(FALSE, TRUE)])                                      #1862 seq
+colnames(custom_fasta)<-c("new_tax","sequence")
+custom_fasta$new_tax<-sub(">", "", custom_fasta$new_tax)
+```
+
+### bind SILVA, PR2, custom sequences to one fasta file
+```{r}
+silva.pr2.custom_fasta<-as.data.frame(rbind(silva_fasta,
+                                            pr2_fasta,
+                                            custom_fasta)) #410331
+#make sure no more than 7x names (last row should be all NAs)
+total.names<-read.table(text = as.character(silva.pr2.custom_fasta$new_tax), sep = ";", as.is = TRUE, fill = TRUE,na.strings = "")
+
+#write fasta
+#write.fasta(as.list(silva.pr2.custom_fasta$sequence),silva.pr2.custom_fasta$new_tax,"silva_pr2_custom_20241010.fasta")
+```
+

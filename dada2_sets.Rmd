@@ -1,0 +1,267 @@
+---
+title: "DADA2 of benchmarking studies for CABO-16S"
+author: "Eitel et al 2024"
+date: "9/13/2024"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float:
+      collapsed: true
+
+---
+
+```{r setup, include=F}
+working_dir=paste0("/export/data1/projects/tagdb_public/")
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = working_dir)
+
+### RUN THIS LINE IN THE CONSOLE AGAIN:
+setwd(working_dir)
+```
+
+
+## DADA2 on benchmarking sets
+To have a representative benchmarking set to compare CABO-16S to the unamended SILVA 138.1 dataset, we collected a set of V4V5 16S rRNA amplicon surveys from diverse environments as well as well-characterized mock communities. For the environmental sets, we elected to reprocess them all from the raw data to ensure similar levels of sequence diversity. Note that sequencing depth, extraction methods, and more were not incorporated - this is not meant to be a meta-analysis but rather a way to obtain a diversity of ASV sequences generated as one would from a real analysis. Each dataset was processed independently.
+
+Overall workflow taken from [the DADA2 recommendations](https://benjjneb.github.io/dada2/tutorial.html) and adjusted as needed for the various datasets.
+
+### Obtaining FASTQs
+
+
+### Raw datasets
+The full metadata and source for the exact scrips is available at the [Supplemental Table 1 LINK]() associated with the paper. Briefly, the data are subsets of the following sets available on NCBI:
+
+* Methane seep - from [Marlow et al. 2021](https://www.pnas.org/doi/10.1073/pnas.2006857118) at [PRJNA648152](https://www.ncbi.nlm.nih.gov/sra/?term=PRJNA648152)
+* Hydrothermal vent - from [Speth et al. 2022](https://www.nature.com/articles/s41396-022-01222-x) at [PRJNA713414](https://www.ncbi.nlm.nih.gov/bioproject/713414)
+* Mono Lake water - from [Phillips et al 2021](https://onlinelibrary.wiley.com/doi/10.1111/gbi.12437) at [PRJNA702881](https://www.ncbi.nlm.nih.gov/bioproject/702881)
+* Seagrass - from [Kardish et al. 2023](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9985655/) at 
+[PRJNA731931](https://www.ncbi.nlm.nih.gov/bioproject/731931)
+* Soil - from [Porter et al](https://www.nature.com/articles/s41598-023-30732-7#Sec9) at [PRJNA565010](https://www.ncbi.anlm.nih.gov/bioproject/565010)
+* Fouhy et al (mock communities) - from [Fouhy et al 2016](https://www.sciencedirect.com/science/article/pii/S200103702030516X) at [PRJNA315115](https://www.ncbi.nlm.nih.gov/bioproject/315115)  *single-end reads*
+* [Kozich et al 2013](https://journals.asm.org/doi/10.1128/aem.01043-13) are not on NCBI but the specified FASTQ's were found from the [mothur website here](https://mothur.org/MiSeqDevelopmentData/)
+
+
+For downloading the subset used in the benchmarking, we created a specific file, e.g., `seeps_srr.txt`, in the format 
+```
+SRR14626118
+SRR14626117
+SRR14626126
+SRR14626125
+```
+
+and these were downloaded with [sra-tools](https://github.com/ncbi/sra-tools)
+```{bash eval=F}
+for srr in $(cat seeps_srr.txt); do fasterq-dump --skip-technical --split-files --threads 12 -O seeps $srr; done
+```
+
+
+
+
+### Pre-analyzed data 
+The coastal phytoplankton data from [Needham et al 2016](https://www.nature.com/articles/nmicrobiol20165#MOESM258) was downloaded and excerpted from their analyzed QIIME2 data as follows:
+```{bash eval=F}
+wget https://figshare.com/ndownloader/files/3392435?private_link=8390ec084f4311e5a8ca06ec4b8d1f61 # biom
+wget https://figshare.com/ndownloader/files/3392399?private_link=eae0d9224f4311e5af6806ec4b8d1f61 # repseqs
+mv 3392399?private_link=eae0d9224f4311e5af6806ec4b8d1f61 needham_2016.fna
+mv 3392435?private_link=8390ec084f4311e5a8ca06ec4b8d1f61 needham_2016.biom
+```
+
+An arbitrary subset of paired size fractions was subset, unused ASVs were dropped, and reformatted into the similar format as the reprocessed data.
+```{r}
+needham <- as.matrix(phyloseq::otu_table(phyloseq::import_biom('needham_2016.biom')))
+needham <- needham[,grep("spot.[3].1", grep("blank", grep("dots", colnames(needham), value=T), invert=T, value=T), value=T)]
+needham <- needham[rowSums(needham) > 0, ]
+
+needham_seqs <- readDNAStringSet('needham_2016.fna')
+names(needham_seqs) <- gsub(" .*$", "", names(needham_seqs))
+needham_seqs <- needham_seqs[rownames(needham)]
+
+names(needham_seqs) <- paste0("needham-ASV_", c(1:length(needham_seqs)))
+rownames(needham) <- names(needham_seqs)
+
+writeXStringSet(needham_seqs, "ASVs-needham.fa")
+write.table(needham, 'ASV_counts-needham.tsv', sep="\t", quote=F, col.names=NA)
+
+rm(needham)
+rm(needham_seqs)
+```
+
+
+### DADA2 process
+#### Cutadapt
+Primers were removed, if they were retained in the data pulled from NCBI.
+
+```{bash eval=F}
+suf="soil"
+#MY_FILES=$(cat inhouse_2ab.txt)  ### EDIT THIS FOR YOUR SAMPLES!!
+#MY_FILES=$(head -14 pescadero_srr.txt| sed "s,\(.*\)$,$suf/\1_1.fastq,")  ### Pescadero
+MY_FILES=$(cat ${suf}_srr.txt | sed "s,\(.*\)$,$suf/\1_1.fastq,")  ### MLW
+
+
+echo -e "Today we are analyzing:\n\n$MY_FILES"
+echo ""
+
+mkdir -p fastq_cutadapt_$suf  # to make the directory where cutadapt-processed files will go
+
+for R1 in $MY_FILES; do 
+R2=$(echo $R1 | sed 's/_1.f/_2.f/')  # srr fastqdump
+
+# v4v5 515f 926r
+cutadapt -a ^GTGYCAGCMGCCGCGGTAA...AAACTYAAAKRAATTGRCGG -A ^CCGYCAATTYMTTTRAGTTT...TTACCGCGGCKGCTGRCAC --discard-untrimmed -m 100 -o fastq_cutadapt_${suf}/$(basename $R1) -p fastq_cutadapt_${suf}/$(basename $R2) $R1 $R2
+
+done
+```
+
+### Main DADA2 workflow
+
+#### Reading in data
+Read in data. The last `gsub` line sets the sample names by trimming off the general filename junk (`S00_L001_R2.fastq.gz`) but modify as needed for different datasets.
+```{r message=F, results='hide', warning=F, eval=F}
+library(dada2)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+
+#### kozich
+#forward_reads <- list.files("kozich_2015/", pattern="R1_001", full.names = T)
+#reverse_reads <- list.files("kozich_2015/", pattern="R2_001", full.names = T)
+
+#### fouhy
+#forward_reads <- list.files("fouhy_2016/", pattern="_1.", full.names = T)
+
+### srr
+suf="soil"
+forward_reads <- grep("", list.files(paste0("fastq_cutadapt_",suf), pattern="_R*1\\.f", full.names = T), value=T)
+reverse_reads <- grep("", list.files(paste0("fastq_cutadapt_",suf), pattern="_R*2\\.f", full.names = T), value=T)
+
+
+# this is names of files where filtered forward reads will be saved to, they're not filtered yet
+#filtered_forward_reads <- gsub(".fastq.gz","_filtered.fastq", forward_reads)  #fouhy
+filtered_forward_reads <- gsub(".fastq","_filtered.fastq", forward_reads)  #paired
+filtered_reverse_reads <- gsub(".fastq","_filtered.fastq", reverse_reads)
+
+# set up sample names - double check it stripped off the junk appropriately
+samples <- gsub("^.*/","", gsub("_[0-9]*_filt.*$", "", filtered_forward_reads)) ## srr
+print(samples)
+```
+
+
+#### Filter & error rates
+Note that this step defaults to the standard Orphan lab parameters for trimming (`truncLen=`), 240bp forward / 200bp reverse. If you dislike this (or finished and are dissatisfied with the results), run the previous section to optimize this step.
+
+```{r eval=F}
+## paired v4v5
+filtered_out <- filterAndTrim(forward_reads, filtered_forward_reads,
+                reverse_reads, filtered_reverse_reads, maxEE=c(2,2),
+                rm.phix=TRUE, minLen=150, truncLen=c(230,200))
+
+## paired v4
+# filtered_out <- filterAndTrim(forward_reads, filtered_forward_reads,
+#                 reverse_reads, filtered_reverse_reads, maxEE=c(2,2),
+#                 rm.phix=TRUE, minLen=150, truncLen=c(240,200))
+
+
+## fouhy
+# filtered_out <- filterAndTrim(forward_reads, filtered_forward_reads,
+#                 maxEE=c(2),
+#                 rm.phix=TRUE, minLen=300, truncLen=c(370))
+
+cbind(filtered_out, perc_kept = filtered_out[,2]/filtered_out[,1])
+```
+
+
+#### Estimate error models & denoise 
+Using the filtered reads generated in the last step, this next chunk will estimate the error rates from the dataset. Sequences are then dereplicated which `dada()` uses with the error model to define ASVs and discard erroneous variants. 
+
+```{r eval=F}
+err_forward_reads <- learnErrors(filtered_forward_reads, nbases = 2e7, randomize=T, multithread=18)
+err_reverse_reads <- learnErrors(filtered_reverse_reads, nbases = 2e7, randomize=T, multithread=18)
+
+derep_forward <- derepFastq(filtered_forward_reads, verbose=FALSE)
+derep_reverse <- derepFastq(filtered_reverse_reads, verbose=FALSE)
+
+# the sample names in these objects are initially the file names, this sets them to the sample names
+names(derep_forward) <- samples #gsub("^.*/","", gsub("_S[0-9]*_.*$", "", filtered_forward_reads)) 
+names(derep_reverse) <- samples #gsub("^.*/","",gsub("_S[0-9]*_.*$", "", filtered_forward_reads))
+
+# actual DADA2 denoising step
+dada_forward <- dada(derep_forward, err=err_forward_reads, pool="pseudo", multithread=18)
+dada_reverse <- dada(derep_reverse, err=err_reverse_reads, pool="pseudo", multithread=18)
+```
+
+#### Merge and chimera cleaning
+Paired datasets were merged if needed with default settings before identifying and removing chimeras.
+```{r eval=F}
+merged_amplicons <- mergePairs(dada_forward, derep_forward, dada_reverse, derep_reverse, 
+                               trimOverhang=TRUE, minOverlap=12)
+
+seqtab <- makeSequenceTable(merged_amplicons)  # paired
+#seqtab <- makeSequenceTable(dada_forward)  # unpaired (fouhy)
+
+print("Merged fraction:")
+rowSums(seqtab) / rowSums(makeSequenceTable(dada_forward))
+
+seqtab.nochim <- removeBimeraDenovo(seqtab, verbose = T, method = 'consensus')
+
+print("Non-chimeric fraction:")
+sum(seqtab.nochim)/sum(seqtab)
+```
+
+### Summarize read retention by step
+Plot this summary:
+```{r eval=F, message=FALSE, warning=FALSE}
+getN <- function(x) sum(getUniques(x))
+
+summary_tab <- data.frame(row.names=samples, samp=samples, input=filtered_out[,1],
+               filtered=filtered_out[,2], dada_f=sapply(dada_forward, getN),
+               dada_r=sapply(dada_reverse, getN), merged=sapply(merged_amplicons, getN),
+               nonchim=rowSums(seqtab.nochim),
+               final_perc_reads_retained=round(rowSums(seqtab.nochim)/filtered_out[,1]*100, 1))
+
+summary_tab
+write.table(summary_tab, paste0("read-count-tracking",suf,".tsv"), quote=FALSE, sep="\t", col.names=NA)
+
+ggplot(melt(summary_tab[,-ncol(summary_tab)], variable.name='Step', value.name='Reads'), aes(x = Step, y = Reads)) +
+	#geom_bar(aes(fill = Step), stat = 'identity') + 
+  geom_boxplot(outlier.shape = NA) + geom_jitter(aes(color=samp), height=0, width=0.2) + guides(fill='none') +
+  theme_bw() + theme(axis.text.x = element_text(angle = 90, color='black', hjust=1, vjust=0.5), 
+                     axis.line.x = element_line(), axis.line.y = element_line())
+ggsave(paste0("read-count-tracking",suf,".pdf"), width=8, height=6)
+
+melt(summary_tab[,-ncol(summary_tab)], variable.name='Step', value.name='Reads') %>% group_by(samp) %>%
+  mutate(Reads=Reads/Reads[Step == "input"]) %>% mutate(guess_type='sample') %>% 
+  mutate(guess_type=replace(guess_type, grep("[Bb]lank|[Cc]ont[rol]*|[Nn]eg|DNAex|50cyc",samp), 'control')) %>%
+  ggplot(aes(x = Step, y = Reads)) +
+  geom_boxplot(aes(color = guess_type), outlier.shape = NA) + theme_bw() +
+  geom_point(position=position_jitterdodge(jitter.height=0, jitter.width=0.2), aes(fill=guess_type), alpha=0.6, pch=21) +
+	theme(axis.text.x = element_text(angle = 90, color='black', hjust=1, vjust=0.5), panel.background = element_blank(),
+	      axis.line.x = element_line(), axis.line.y = element_line())
+ggsave(paste0("read-count-tracking",suf,".pdf"), width=8, height=6)
+```
+
+#### Save results
+The fasta and ASV counts table were saved, for use in the `benchmarking.Rmd` set
+```{r}
+batch_name <- suf
+
+asv_seqs <- colnames(seqtab.nochim)
+asv_headers <- vector(dim(seqtab.nochim)[2], mode="character")
+
+for (i in 1:dim(seqtab.nochim)[2]) {
+  asv_headers[i] <- paste0(">", batch_name, "-ASV_", i)
+}
+
+# making and writing out a fasta of our final ASV seqs
+asv_fasta <- c(rbind(asv_headers, asv_seqs))
+write(asv_fasta, paste0("ASVs-", batch_name, ".fa"))
+
+  # count table:
+asv_tab <- t(seqtab.nochim)
+row.names(asv_tab) <- sub(">", "", asv_headers)
+write.table(asv_tab, paste0("ASV_counts-", batch_name, ".tsv"), sep="\t", quote=F, col.names=NA)
+
+```
+
+
