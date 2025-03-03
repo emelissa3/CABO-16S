@@ -1,7 +1,7 @@
 ---
 title: "Combining SILVA 138.2, PR2 5.0.0, and custom sequences for CABO-16S"
-author: "Eitel et al. 2024"
-date: "2023-09-13"
+author: "Eitel et al. 2025"
+date: "2025-03-03"
 output:
   html_document:
       toc: true
@@ -9,6 +9,7 @@ output:
       toc_float:
         collapsed: true
 ---
+
 ### Set working directory
 ```{r setup, include=T}
 working_dir="/export/data1/projects/tagdb_public/"
@@ -19,6 +20,10 @@ knitr::opts_knit$set(root.dir = working_dir)
 ### RUN THIS LINE IN THE CONSOLE AGAIN:
 setwd(working_dir)
 ```
+
+## Combining and Filtering SILVA, PR2, and custom sequences  
+This script details how to obtain, refine, and combine sequences from SILVA 138.2, PR2 5.0.0, and custom sequences to create the fasta files required for training the CABO-16S database and the simplified SILVA database. Combining these sequences must be followed by generation of the training set is described in 'Training_CABO-16S.Rmd'
+
 ###Libraries
 ```{r message=F, warning=F}
 library(dplyr)
@@ -33,7 +38,8 @@ library(DECIPHER)
 
 ### SILVA 138.2
 
-###Downloading SILVA-138.2
+### Download SILVA
+Obtain and unzip sequences, quality metrics, and taxonomy from SILVA 138.2
 ```{bash eval=F}
 #web download
 wget https://www.arb-silva.de/fileadmin/silva_databases/release_138.2/Exports/quality/SILVA_138.2_SSURef_Nr99.quality.gz
@@ -46,13 +52,13 @@ gunzip SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz
 gunzip taxmap_slv_ssu_ref_nr_138.2.txt.gz
 ```
 
-### Replace uracil (U) with thymine (T)
+### Replace uracil (U) with thymine (T) in sequences from SILVA
 ```{bash eval=F}
 sed -i"" '/>/!s/U/T/g' SILVA_138.2_SSURef_NR99_tax_silva.fasta
 ```
 
-###Filtering SILVA-138.2 quality
-#Pintail value < 50 or an alignment quality value < 75 have been assigned to color group 1 in ARB (red). These sequences of decreased quality should be removed when making new training sets
+### Filter SILVA quality
+Pintail value < 50 or an alignment quality value < 75 have been assigned to color group 1 in ARB (red). These sequences of decreased quality should be removed when making new training sets.
 ```{r}
 #import silva-138.2
 silva_1382 <- readDNAStringSet('SILVA_138.2_SSURef_NR99_tax_silva.fasta',format="fasta")
@@ -77,7 +83,8 @@ quality<-quality[quality$Alignment.Quality>=75, ] #446873 remain
 silva_1382<-silva_1382[silva_1382$accession %in% quality$accession,] #446873
 ```
 
-### SILVA taxonomy
+### SILVA taxonomy 
+For CABO-16S, squences identified as chloroplasts, mitochondria, and phyla Eukaryota are removed. To create a simplified SILVA 138.2 dataset for comparison to CABO-16S in Eitel et al., 2025, sequences identified as chloroplasts were retained. For both CABO-16S and the simplified SILVA 138.2: An outgroup of 100 randomly chosen phyla Eukaryota are retained. Taxonomy is cleaned to remove unhelpful name schemes 
 ```{r}
 #import taxonomy
 silva.names<-read.csv("taxmap_slv_ssu_ref_nr_138.2.txt", sep="\t", header=T, quote='')
@@ -175,7 +182,8 @@ silva.names$path_5<-ifelse(grepl("^Incertae Sedis",silva.names$path_5),paste0(si
 silva.names$path_5<-sub("Incertae Sedis Incertae Sedis","Incertae Sedis",silva.names$path_5)
 ```
 
-###Simplify Euk out group taxonomy
+### SILVA Eukaryota Taxonomy
+Taxonomy of the phyla Eukaryota outgroup is only retained at rank phyla
 ```{r}
 silva.names.Euk<-subset(silva.names.Euk,select=c(accession,path))
 silva.names.Euk<-splitstackshape::cSplit(silva.names.Euk,'path',';')
@@ -184,10 +192,10 @@ silva.names.Euk<-cbind(silva.names.Euk,matrix(NA,ncol=6))
 colnames(silva.names.Euk)<-c("accession","path_1","path_2","path_3","path_4","path_5","path_6","path_7")
 ```
 
-###Create new Silva-138.2 fasta
+### Write out SILVA
 ```{R}
 #combine Proks and Euks
-silva.names<-rbind(silva.names,silva.names.Euk) #408171
+silva.names<-rbind(silva.names,silva.names.Euk) #408452
 
 #create updated taxonomic name
 silva.names$new_tax<-paste0(silva.names$accession," Root;",silva.names$path_1,";",silva.names$path_2,";",silva.names$path_3,";",silva.names$path_4,";",silva.names$path_5,";",silva.names$path_6,";",silva.names$path_7,";")
@@ -201,7 +209,7 @@ silva_fasta<-subset(silva_1382_new,select=c(new_tax,sequence))
 #write.fasta(as.list(silva_1382_new$sequence),silva_1382_new$new_tax,"Silva_1382nr99_P50A75_100Euks_noChl_20241010.fasta")
 ```
 
-### Add PR2 sequences
+### Download PR2
 ```{r}
 #https://pr2database.github.io/pr2database/articles/pr2database.html
 #install.packages(devtools)
@@ -219,6 +227,8 @@ cat("total colons: ",nrow(pr2[grepl("*:",pr2$domain),]),"\n") #8688
 
 ```
 
+### Retain Organelles
+Only sequences associated with plastids, mitochondrion, apicoplasts, and chromatophores
 ```{r}
 pr2<-pr2[grepl("*:p|*:m|*:a|*:c",pr2$domain),] #8540 remain
 
@@ -232,7 +242,7 @@ pr2$new_tax<-paste0(pr2$pr2_accession," Root;", pr2$domain,";",pr2$division,";",
 pr2$new_tax <- gsub(";;*$", ";", pr2$new_tax)
 
 # drop all but one trailing sequential _X type taxon
-pr2$new_tax <- unlist(lapply(strsplit(pr2$new_tax, ";"), 
+pr2$new_tax2 <- unlist(lapply(strsplit(pr2$new_tax, ";"), 
                              function(x) { 
                                a = !grepl("_X*:[a-z]", x); 
                                trimmed=F; 
@@ -244,7 +254,7 @@ pr2$new_tax <- unlist(lapply(strsplit(pr2$new_tax, ";"),
                             }))
 
 # fix if the _X is a duplication of preceding level
-pr2$new_tax <- unlist(lapply(strsplit(pr2$new_tax, ";"), 
+pr2$new_tax3 <- unlist(lapply(strsplit(pr2$new_tax, ";"), 
                              function(x) {
                                if(gsub("_X*(:[a-z]*)", "\\1", x[length(x)]) == x[length(x)-1]) {x=x[1:(length(x)-1)]} 
                                paste0(paste0(x, collapse = ";") ,";") } ))
@@ -252,7 +262,7 @@ pr2$new_tax <- unlist(lapply(strsplit(pr2$new_tax, ";"),
 pr2_fasta<-subset(pr2,select=c(new_tax,sequence))
 ```
 
-###Add Custom sequences
+### Add Custom sequences
 ```{r}
 custom_fasta <- read.csv('orphan.seq_1200bp_20241014.fasta', sep="\t", header=F, quote='')
 custom_fasta<-data.frame(V1 = custom_fasta$V1[c(TRUE, FALSE)], 
@@ -261,7 +271,8 @@ colnames(custom_fasta)<-c("new_tax","sequence")
 custom_fasta$new_tax<-sub(">", "", custom_fasta$new_tax)
 ```
 
-### bind SILVA, PR2, custom sequences to one fasta file
+### Bind and write out
+Filtered SILVA, PR2, and custom sequences are combined into one fasta file
 ```{r}
 silva.pr2.custom_fasta<-as.data.frame(rbind(silva_fasta,
                                             pr2_fasta,
@@ -270,6 +281,6 @@ silva.pr2.custom_fasta<-as.data.frame(rbind(silva_fasta,
 total.names<-read.table(text = as.character(silva.pr2.custom_fasta$new_tax), sep = ";", as.is = TRUE, fill = TRUE,na.strings = "")
 
 #write fasta
-#write.fasta(as.list(silva.pr2.custom_fasta$sequence),silva.pr2.custom_fasta$new_tax,"silva_pr2_custom_20241010.fasta")
+write.fasta(as.list(silva.pr2.custom_fasta$sequence),silva.pr2.custom_fasta$new_tax,"silva_pr2_custom_20241010.fasta")
 ```
 
