@@ -1,7 +1,7 @@
 ---
 title: "DADA2 of benchmarking studies for CABO-16S"
-author: "Eitel et al 2024"
-date: "9/13/2024"
+author: "Eitel et al 2025"
+date: "03/03/2025"
 output: 
   html_document:
     toc: true
@@ -31,7 +31,7 @@ Overall workflow taken from [the DADA2 recommendations](https://benjjneb.github.
 
 
 ### Raw datasets
-The full metadata and source for the exact scrips is available at the [Supplemental Table 1 LINK]() associated with the paper. Briefly, the data are subsets of the following sets available on NCBI:
+The full metadata and source for the exact scrips is available as Supplemental Table 2 associated with the manuscript or on [FigShare](https://doi.org/10.6084/m9.figshare.27288090.v2). Briefly, the data are subsets of the following sets available on NCBI:
 
 * Methane seep - from [Marlow et al. 2021](https://www.pnas.org/doi/10.1073/pnas.2006857118) at [PRJNA648152](https://www.ncbi.nlm.nih.gov/sra/?term=PRJNA648152)
 * Hydrothermal vent - from [Speth et al. 2022](https://www.nature.com/articles/s41396-022-01222-x) at [PRJNA713414](https://www.ncbi.nlm.nih.gov/bioproject/713414)
@@ -242,7 +242,7 @@ ggsave(paste0("read-count-tracking",suf,".pdf"), width=8, height=6)
 ```
 
 #### Save results
-The fasta and ASV counts table were saved, for use in the `benchmarking.Rmd` set
+The fasta and ASV counts table were saved, for use in the `benchmarking_CABO-16S.Rmd` set
 ```{r}
 batch_name <- suf
 
@@ -263,5 +263,3 @@ row.names(asv_tab) <- sub(">", "", asv_headers)
 write.table(asv_tab, paste0("ASV_counts-", batch_name, ".tsv"), sep="\t", quote=F, col.names=NA)
 
 ```
-
-
