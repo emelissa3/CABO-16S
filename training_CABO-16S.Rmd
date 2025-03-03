@@ -1,7 +1,7 @@
 ---
-title: "benchmarking"
-author: "Eitel et al. 2024"
-date: "2023-09-13"
+title: "Training CABO-1sS"
+author: "Eitel et al. 2025"
+date: "2025-03-03"
 output:
   html_document:
       toc: true
@@ -24,7 +24,7 @@ setwd(working_dir)
 
 ## Training the classifier
 
-Classifiers were trained with each database, CABO-16S and [SILVA 138.2](https://www.arb-silva.de/), usinng IDTAXA based on standard parameters. See the script [LINK TO CABO MERGE]() for the construction of each. Briefly, the SILVA 138.2 fasta was obtained by dropping the eukaryotic (18S rRNA) sequences and otherwise left intact. CABO-16S is the result of merging this prokaryotic-only SILVA 138.2 with plastids from the [PR2](https://pr2-database.org/) database and a set of unpublished sequences. 
+Classifiers were trained with each database, CABO-16S and [SILVA 138.2](https://www.arb-silva.de/), usinng IDTAXA based on standard parameters. See the script [combining_CABO-16S.Rmd](https://github.com/emelissa3/CABO-16S/blob/main/combining_CABO-16S.Rmd) for the construction of each. Briefly, the SILVA 138.2 fasta was obtained by dropping the eukaryotic (18S rRNA) sequences and otherwise left intact. CABO-16S is the result of merging this prokaryotic-only SILVA 138.2 with plastids from the [PR2](https://pr2-database.org/) database and a set of unpublished sequences. 
 
 Code presented here is drawn from the examples and recommendations at [IDTXA documentation](http://www2.decipher.codes/Documentation/Documentation-ClassifySequences.html)
 
@@ -116,4 +116,3 @@ print(length(probSeqs)) # number of remaining problem sequences
 ## if satisfied
 save(trainingSet, file="CABO-16S.RData")
 ```
-
