@@ -1,7 +1,7 @@
 ---
-title: "benchmarking"
-author: "Eitel et al. 2024"
-date: "2023-09-13"
+title: "Benchmarking CABO-16S"
+author: "Eitel et al. 2025"
+date: "2025-03-03"
 output:
   html_document:
       toc: true
@@ -28,7 +28,7 @@ The widespread adoption of 16S rRNA amplicon sequencing has greatly advanced sur
 
 Due to its breadth and consistent maintenance, SILVA is one of the most popular databses. However, SILVA does not include plastids, and some information may be lacking for particular groups of environmental interest (e.g., uncultured symbiotic deep-sea sulfate-reducing bacteria). Although SILVA 138.2 is improved compared to previous versions, missing groups within training sets can lead to drastic differences in identification of 16S rRNA relative abundance. 
 
-We joined existing databases to allow combined annotation of prokaryotic and plastidal 16S rRNA sequences. This new database combines the entire set of prokaryotic sequences from SILVA-138.2  with plastids from the PR2 database. Since this operation includes a merge step, we also merged previously unpublished lab sequences to produce a new training set. The specific commands used to merge these reference sets are available at [ MERGE SCRIPT](). A classifier was then trained with [IDTAXA's LearnTaxa()](http://www2.decipher.codes/Classification.html); the code used is available at [TRAINING SCRIPT](). Both the raw fastas and the R object for the IDTAXA trained classifier are available at [FigShare](https://doi.org/10.6084/m9.figshare.27288090.v1). A benchmarking set of v4v5 16S rRNA amplicon datasets including both mock communities and diverse environmental systems (e.g. marine and lake water, terrestrial soils, deep and shallow marine sediment, and guts) was processed with [DADA2](https://benjjneb.github.io/dada2/), for which the script is available at [DADA2 SCRIPT]() and the resulting ASV counts matrix and representative sequences are available in the [SUPPLEMENTARY TABLES]().
+We joined existing databases to allow combined annotation of prokaryotic and plastidal 16S rRNA sequences. This new database combines the entire set of prokaryotic sequences from SILVA-138.2  with plastids from the PR2 database. Since this operation includes a merge step, we also merged previously unpublished lab sequences to produce a new training set. The specific commands used to merge these reference sets are available as [combining_CABO-16S.Rmd](https://github.com/emelissa3/CABO-16S/blob/main/combining_CABO-16S.Rmd). A classifier was then trained with [IDTAXA's LearnTaxa()](http://www2.decipher.codes/Classification.html); the code used is available at [training_CABO-16S.Rmd](https://github.com/emelissa3/CABO-16S/blob/main/training_CABO-16S.Rmd). Both the raw fastas and the R object for the IDTAXA trained classifier are available at [FigShare](https://doi.org/10.6084/m9.figshare.27288090.v2). A benchmarking set of v4v5 16S rRNA amplicon datasets including both mock communities and diverse environmental systems (e.g. marine and lake water, terrestrial soils, deep and shallow marine sediment, and guts) was processed with [DADA2](https://benjjneb.github.io/dada2/), for which the script is available at [dada2_sets.Rmd](https://github.com/emelissa3/CABO-16S/blob/main/dada2_sets.Rmd) and the resulting ASV counts matrix and representative sequences are available in the supplement of the manuscript or on [FigShare](https://doi.org/10.6084/m9.figshare.27288090.v2).
 
 This new reference database allows for correct, one-step identification of bacteria, archea, and plastids in diverse samples. This document presents the commands used to classify the benchmarking ASV sets and produce the figures used to determine its efficacy that are presented in the publication. Additionally, this code is anticipated to be used to compare future versions of SILVA, PR2, and merges of different subsets to evaluate updated training sets. 
 
@@ -66,29 +66,27 @@ ggtheme_rot <- ggtheme + theme(axis.text.x = element_text(angle=90, hjust=1, vju
 #### Download starting data
 This script assumes the following data have been produced by the other scripts, or their outputs must be downloaded:
 
- * ASV counts matrix, Supplemental Table S2 - [LINK]()
- * ASV fasta, Additional File 1 - [LINK]()
- * Classifier trained with SILVA 138.2 - [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v1)
- * Classifier trained with CABO-16S - [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v1)
- * OPTIONAL - metadata about each sample from Supplemental Table 1 - [LINK]()
+ * ASV counts matrix, Supplemental Table S3, `Table_S3_ASVcounts.xlsx`- [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v2)
+ * ASV fasta, Additional File 1, `Data_ASVs.fa` - [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v2)
+ * Classifier trained with SILVA 138.2 - [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v2)
+ * Classifier trained with CABO-16S - [FIGSHARE](https://doi.org/10.6084/m9.figshare.27288090.v2)
+ * OPTIONAL - metadata about each sample from Supplemental Table 2, `Table_S2_Metadata.csv` - [FIGSHARE](https://figshare.com/articles/dataset/CABO-16S_and_component_16S_rRNA_databases/27288090/2)
 
 
 ### Classifying
 
 The ASVs were loaded in
 ```{r message=F, warn=F}
-#asv_counts <- do.call(rbind, lapply(batches, function(x) melt(read.csv(paste0("ASV_counts-", x, ".tsv"), sep="\t"))))
 asv_counts <- do.call(rbind, lapply(batches, function(x) 
-  melt(readxl::read_excel('supplementals/Table_S2.xlsx', sheet = paste0('ASV_counts-',x)))))
+  melt(readxl::read_excel('supplementals/Table_S3_ASVcounts.xlsx', sheet = paste0('ASV_counts-',x)))))
 colnames(asv_counts) <- c('ASV','Sample','Count')
 asv_counts$Dataset <- gsub("-ASV_.*$","", asv_counts$ASV)
 
 asv_seqs <- readDNAStringSet('supplementals/Data_ASVs.fa')
-#asv_seqs <- readDNAStringSet(paste0("ASVs-",batches,".fa"))
 ```
 
 
-We loaded in the database trained based on the script `training.Rmd`, the trained objects can be found at the above section.
+We loaded in the database trained based on the script `training_CABO-16S.Rmd`, the trained objects can be found at the above section.
 ```{r eval=F}
 load("SILVA-138.2_only_withChl.RData") # SILVA 138.2
 silva_138.2_orig <- trainingSet
@@ -177,7 +175,7 @@ Metadata from the supplemental table is then read in (if available) and the ASV 
 
 ```{r}
 counts_tab <- read.csv("ASV_counts-PROCESSED.tsv", sep="\t", row.names = 1)
-s1 <- read.csv("supplementals/Table_S1.csv")
+s2 <- read.csv("supplementals/Table_S2_Metadata.csv")
 counts_tab$Sample <- gsub(".16SF.*$","", gsub("^.*quince", "needham_", counts_tab$Sample))
 
 counts_tab$Dataset[counts_tab$Dataset == "fouhy"] <- 'Fouhy et al'
@@ -195,13 +193,13 @@ counts_tab$Method[counts_tab$Method == "138.2_o"] <- 'SILVA 138.2'
 counts_tab$Dataset <- factor(counts_tab$Dataset, levels=c("Fouhy et al", "Kozich et al", "Soil","Methane seep", "Hydrothermal vent", "Seagrass", "Marine water", "Mono Lake water"))
 counts_tab$Method <- factor(counts_tab$Method, levels=rev(unique(counts_tab$Method)))
 
-counts_tab$Sample <- factor(counts_tab$Sample, unique(s1$Sample[s1$Sample %in% counts_tab$Sample]))
+counts_tab$Sample <- factor(counts_tab$Sample, unique(s2$Sample[s2$Sample %in% counts_tab$Sample]))
 ```
 
 
 ### Plots for benchmarking
 
-#### Fig 2 - Classified / Unclassified
+#### Fig 1 - Classified / Unclassified
 Overview of how many ASVs are classified or not with each training set.
 
 ```{r}
@@ -215,18 +213,11 @@ percclass <- counts_tab %>% ungroup() %>% select(Dataset, Method, ASV, Domain:Sp
 dset_namer <- setNames(unique(percclass$Dataset), gsub(" \\(.*$","", unique(percclass$Dataset)))  
 percclass$Dataset = factor(percclass$Dataset, 
                            levels=dset_namer[levels(counts_tab$Dataset)])
-  
-
 
 p0 <- ggplot(percclass, aes(x=taxlevel)) +
             geom_ribbon(data=percclass %>% group_by(Dataset, taxlevel) %>% summarise(minp=min(Perc), maxp=max(Perc)),
                         aes(ymin=minp, ymax=maxp, fill=Dataset, group=Dataset), alpha=0.1, show.legend = F) +
             geom_line(aes(y=Perc, linetype=Method, color=Dataset, group=interaction(Method,Dataset))) +
-            # geom_text(data= unique(counts_tab[,c("Dataset","ASV")]) %>% group_by(Dataset) %>%
-            #             summarise(nASVs=paste0(unique(Dataset),": ", format(length(ASV), big.mark=","), " ASVs")) %>%
-            #             mutate(Dataset=factor(Dataset, levels=rev(levels(Dataset)))),
-            #            x='Domain', aes(y=as.numeric(Dataset)*5.5, label=nASVs, color=Dataset), 
-            #           hjust=0, size=3.6, show.legend = F) +
             scale_y_continuous(expand = expansion(c(0,0))) + scale_x_discrete(expand = c(0.01,0.1)) +
             labs(y='ASVs with taxonomy assigned (%)', x='', color='Dataset (n. ASVs)') +
             scale_color_manual(values = stock_colors) + scale_fill_manual(values = stock_colors) + 
@@ -240,13 +231,13 @@ p0
 p1 <- counts_tab %>% ungroup() %>% select(Dataset, Method, ASV, Domain:Species) %>%
   group_by(Dataset, Method) %>% unique() %>%
   summarise(across(Domain:Species,  ~ sum(grepl('nclassified|nspecified', .x)))) %>%
-  melt(id.vars = c('Dataset','Method'), measure.vars = c('Domain','Phylum','Class','Order','Family','Genus','Species'), 
-       variable.name = 'taxlevel', value.name='Count') %>% 
+  melt(id.vars = c('Dataset','Method'), measure.vars = c('Domain','Phylum','Class','Order','Family','Genus','Species'),
+       variable.name = 'taxlevel', value.name='Count') %>%
   ggplot(aes(x=Method, y=Count, fill=Dataset)) +
-  labs(y='Num. ASVs unassigned') + 
+  labs(y='Num. ASVs unassigned') +
   facet_grid(.~taxlevel, space='free_x', scales='free_y') +
   geom_col(position='stack') + scale_y_continuous(expand = expansion(c(0,0.05))) +
-  scale_fill_manual(values = stock_colors) + ggtheme_rot 
+  scale_fill_manual(values = stock_colors) + ggtheme_rot
 p1
 ```
 
@@ -270,16 +261,16 @@ p2
 
 These three subpanels were stitched together for the manuscript
 ```{r fig.width=10, fig.height=6}
-#gridExtra::grid.arrange(p0, p1 + guides(fill='none'), p2, nrow=2, layout_matrix=matrix(c(1,1,1,2,2,3), nrow=2, byrow = T))
+# g <- gridExtra::grid.arrange(p0, p1 + guides(color='none'), p2, nrow=2, layout_matrix=matrix(c(1,1,1,2,2,3), nrow=2, byrow = T))
 
 g <- gridExtra::grid.arrange(p0, p1 + guides(fill='none'), p2, nrow=2, layout_matrix=matrix(c(1,1,1,2,2,3), nrow=2, byrow = T))
-ggsave("figures/fig2_grid.pdf", g, width=10, height=6)
+ggsave("figures/fig1_grid.pdf", g, width=10, height=6)
 
 ```
 
 
 
-#### Fig 3 - Taxonomic agreement
+#### Fig 2 - Taxonomic agreement
 
 Do the taxonomic profiles look overall similar? I.e. are the taxa that are unclassified or differently classified minor ones?
 
@@ -316,20 +307,35 @@ df_class$Class <- factor(df_class$Class, unique(df_class$Class[order(df_class$Do
 df_class$Class <- factor(df_class$Class, 
                          c(grep("5%|unclassified_Bacteria|unclassified_Root", levels(df_class$Class), value=T, invert = T), 
                            'Classified, <5%','Unclassified, <5%', 'unclassified_Bacteria','unclassified_Root'))
+df_class$Domain <- gsub("Eukaryota.*$","Eukaryota", as.character(df_class$Domain))
 
 
 ggplot(df_class, aes(x=Sample, y=Relabund, fill = Class)) +
   geom_col() +  scale_y_continuous(expand = expansion(c(0,0.0))) +
   facet_grid(Method~Dataset, scales = 'free', space='free') +
   labs(y="Relative abundance (%)", x='') +
-  scale_fill_manual(values = classcols) + 
+  scale_fill_manual(values = classcols) +
   ggtheme_rot + theme(legend.position = 'bottom') + guides(fill=guide_legend(ncol=8))
+ggsave('figures/Fig2.pdf', width=18, height=12)
+```
 
-ggsave('figures/Fig3.pdf', width=14, height=7)
+And a bubble plot with a grid-style layout for a supplemental version (same data, just different presentation).
+```{r fig.width=14, fig.height=7}
+ggplot(df_class, aes(x=Sample, y=Class, fill = Class)) +
+  ggh4x::facet_nested(Method~Dataset, scales = 'free_x', space='free', #switch = 'x',
+                      strip = ggh4x::strip_nested(#text_x = ggh4x::elem_list_text(angle=c(rep(0,8), rep(90,1000)),
+                                                  #                               hjust=c(rep(0.5,8), rep(0,1000))),
+                                                  clip = 'off', size = 'variable')) +
+  geom_point(aes(size=Relabund, color=Class)) + scale_size_continuous(limits=c(1, NA), range=c(0,6)) +
+  scale_color_manual(values = classcols) +
+  labs(y="Relative abundance (%)", x='') +
+  ggtheme_rot + theme(legend.position = 'bottom', legend.key.spacing.y = unit(0.0001, 'lines')) +
+                        guides(fill=guide_legend(ncol=8))
+#ggsave('figures/FigS1.pdf', width=18, height=17)
 ```
  
  
-#### Fig 4 - Alluvial of chloroplast and cyanobacteria
+#### Fig 3 - Alluvial of chloroplast and cyanobacteria
 
 To compare how ASVs were classified based on the two databases, we subset the data to just the marine coastal water dataset (enriched in a diversity of eukaryotic phytoplankton as well as cyanobacteria). Within this set, we focused on the families with at least 100 ASVs.
 
@@ -363,12 +369,12 @@ ggplot(alluvial, aes(x, id=id, split=y, value=Relabund)) +
   scale_fill_manual(values=rainbow(length(levels(alluvial$Phylum)), s=0.44, v=0.9)) +
   ggtheme
 
-ggsave('figures/Fig4_plastids.pdf', width=12, height=7)
+ggsave('figures/Fig3_plastids.pdf', width=12, height=7)
 ```
 
 
 
-#### Fig 5 - Improving resolution in SEEP-SRB
+#### Fig 4 - Improving resolution in SEEP-SRB
 
 As CABO-16S is a merge of SILVA and PR2, we also took the opportunity to merge in some full-length unpublished sequences the Orphan lab has accued over time. Particularly, these include a set of SEEP-SRB1 sequences curated by Ranjani Murali in the process of her recent [paper exploring the diversity of SEEP-SRB1](https://journals.plos.org/plosbiology/article?id=10.1371/journal.pbio.3002292). SEEP-SRB1 evolution and ecophysiology is complicated, and the group is polyphyletic despite being ranked by SILVA as a genus. Notably, SEEP-SRB1 contains many subgroups such as SEEP-SRB1a, SEEP-SRB1g, etc. As these were included, we assessed whether sequences labelled as "Desulfosarcinaceae" or "SEEP-SRB1" were able to be annotated more specifically (i.e., down to the sub-group like Seep-SRB1a). Note that we also included the genus LCP-80 as a focus taxon, as this is the label assigned by SILVA to the group including the sequences most closely related to Seep-SRB1g.
 
@@ -443,7 +449,7 @@ For the manuscript, these two panels were again stitched together.
 ```{r fig.width=12, fig.height=12}
 #gridExtra::grid.arrange(p, q + guides(fill='none'), nrow=2, heights=c(3,2))   # height  12 if 3 panel
 g <- gridExtra::grid.arrange(p, q + guides(fill='none'), nrow=2, heights=c(3,2))   # height  12 if 3 panel
-ggsave("figures/fig5_srb_grid.pdf",g, width=12, height=12)
+ggsave("figures/fig4_srb_grid.pdf",g, width=12, height=12)
 ```
 
 
@@ -482,4 +488,3 @@ q2 <- gather_set_data(srb, 2:7) %>%
 q2  
 
 ```
-
